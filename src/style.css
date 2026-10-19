@@ -129,3 +129,125 @@ body {
 .hud__stat[data-stat='score'] .hud__value {
   color: var(--accent-warning);
 }
+
+.hud__stat--gear[data-gear='HIGH'] .hud__value {
+  color: var(--accent-danger);
+}
+
+.hud__stat--fps .hud__value {
+  font-size: 12px;
+  color: var(--ui-overlay-muted);
+}
+
+.touch-deck {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(100vw, 480px);
+  padding: 0 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  z-index: 20;
+}
+
+.touch-deck[data-mode='visible'] {
+  opacity: 1;
+}
+
+.touch-deck__steer {
+  pointer-events: auto;
+  position: relative;
+  width: 46%;
+  height: 72px;
+  border-radius: 16px;
+  background: rgba(10, 14, 20, 0.55);
+  border: 1px solid rgba(232, 237, 242, 0.14);
+  backdrop-filter: blur(6px);
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+
+.touch-deck__steer.is-active {
+  border-color: var(--accent-primary);
+}
+
+.touch-deck__steer-track {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: rgba(232, 237, 242, 0.18);
+  transform: translateX(-50%);
+}
+
+.touch-deck__steer-knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  transform: translate(-50%, -50%);
+  transition: left 60ms linear;
+  box-shadow: var(--accent-primary-glow);
+  pointer-events: none;
+}
+
+.touch-deck__actions {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.touch-deck__btn {
+  pointer-events: auto;
+  min-width: 64px;
+  min-height: 72px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(232, 237, 242, 0.14);
+  background: rgba(10, 14, 20, 0.55);
+  backdrop-filter: blur(6px);
+  color: var(--ui-overlay);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.touch-deck__btn--gear {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.touch-deck__btn--gear .touch-deck__btn-value {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.touch-deck__btn--brake {
+  border-color: var(--accent-danger);
+  color: var(--accent-danger);
+}
+
+.touch-deck__btn--brake:active {
+  background: rgba(245, 71, 61, 0.2);
+}
