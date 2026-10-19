@@ -1,7 +1,8 @@
 import './style.css';
 import { buildApexChaseTheme, applyTheme } from './theme';
 import { createHud, renderSmokeTest } from './canvas';
-import { db } from './db';
+import { initStorage } from './db';
+import { initInstallPrompt, getState } from './install-prompt';
 
 const tokens = buildApexChaseTheme();
 applyTheme(tokens);
@@ -61,14 +62,7 @@ function loop(now: number): void {
 
 requestAnimationFrame(loop);
 
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  (window as unknown as { __apexChaseInstallPrompt?: Event }).__apexChaseInstallPrompt = e;
-});
-
-db.on('ready', () => {
-  console.debug('[ApexChaseDB] local-first store ready');
-});
+initInstallPrompt();
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
@@ -77,3 +71,43 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     });
   });
 }
+
+async function logInitSummary(): Promise<void> {
+  const [storageEngine] = await Promise.all([initStorage()]);
+
+  const tokensResolved = [
+    '--surface-base',
+    '--surface-road',
+    '--accent-primary',
+    '--accent-warning',
+    '--accent-danger',
+    '--neutral-secondary',
+    '--ui-overlay',
+  ].every((name) => {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value.length > 0;
+  });
+
+  const installState = getState();
+  const standalone =
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+  const swActive =
+    'serviceWorker' in navigator &&
+    (await navigator.serviceWorker.getRegistration()) !== undefined;
+
+  console.info(
+    [
+      '%c[Apex Chase] initialization summary',
+      `  Storage engine:    ${storageEngine}`,
+      `  Theme tokens:      ${tokensResolved ? 'resolved' : 'MISSING — check palette system'}`,
+      `  PWA manifest:      ${document.querySelector('link[rel="manifest"]') ? 'linked' : 'MISSING'}`,
+      `  Service worker:    ${swActive ? 'registered' : import.meta.env.PROD ? 'pending' : 'dev (skipped by design)'}`,
+      `  Install prompt:    ${installState.isInstalled ? 'already installed' : installState.isAvailable ? 'available' : 'not offered by browser yet'}`,
+      `  Display mode:      ${standalone ? 'standalone' : 'browser tab'}`,
+    ].join('\n'),
+    'color: #22d3ee; font-weight: bold;',
+  );
+}
+
+void logInitSummary();
