@@ -1,4 +1,4 @@
-type SegKind = 'straight' | 'left' | 'right';
+type SegKind = 'straight' | 'left' | 'right' | 'center';
 
 interface Segment {
   startWorld: number;
@@ -10,9 +10,12 @@ interface Segment {
 
 /** Road edges stay at least this far inside the canvas boundary. */
 const EDGE_INSET = 20;
-const ROAD_WIDTH_FRACTION = 0.65;
-/** Lateral excursion of a sweeping bend, as a fraction of canvas width. */
-const BEND_FRACTION = 0.18;
+/** Narrow 3-lane profile. */
+const ROAD_WIDTH_FRACTION = 0.48;
+/** Hard curve destinations, as fractions of canvas width. */
+const LEFT_FRACTION = 0.22;
+const CENTER_FRACTION = 0.5;
+const RIGHT_FRACTION = 0.78;
 /** The car sits this far down the screen; used to map screen Y to world distance. */
 const PLAYER_ROW = 0.75;
 
@@ -28,6 +31,11 @@ function clamp(v: number, lo: number, hi: number): number {
 function smootherstep(t: number): number {
   const x = clamp(t, 0, 1);
   return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
+/** Double smoothstep: same zero-derivative ends but a steeper mid-arc for a harder tangent ramp. */
+function easeInOutSharp(t: number): number {
+  return smootherstep(smootherstep(t));
 }
 
 /**
@@ -66,8 +74,9 @@ export class Road {
   private pushSegment(kind: SegKind, startX: number): void {
     const lengthPx = kind === 'straight' ? rand(1500, 2500) : rand(1200, 1800);
     let targetX = startX;
-    if (kind === 'left') targetX = this.clampCenter(startX - this.width * BEND_FRACTION);
-    else if (kind === 'right') targetX = this.clampCenter(startX + this.width * BEND_FRACTION);
+    if (kind === 'left') targetX = this.clampCenter(this.width * LEFT_FRACTION);
+    else if (kind === 'right') targetX = this.clampCenter(this.width * RIGHT_FRACTION);
+    else if (kind === 'center') targetX = this.clampCenter(this.width * CENTER_FRACTION);
     this.segments.push({ startWorld: this.plannedUpTo, lengthPx, startX, targetX, kind });
     this.plannedUpTo += lengthPx;
   }
@@ -75,18 +84,22 @@ export class Road {
   private pickKind(currentX: number): SegKind {
     const center = this.width / 2;
     const drift = (currentX - center) / (this.width / 4);
-    let pLeft = 0.2;
-    let pRight = 0.2;
+    let pLeft = 0.17;
+    let pRight = 0.17;
+    let pCenter = 0.11;
     if (drift > 0.15) {
       pLeft = 0.4;
-      pRight = 0.05;
+      pRight = 0.03;
+      pCenter = 0.15;
     } else if (drift < -0.15) {
       pRight = 0.4;
-      pLeft = 0.05;
+      pLeft = 0.03;
+      pCenter = 0.15;
     }
     const r = Math.random();
     if (r < pLeft) return 'left';
     if (r < pLeft + pRight) return 'right';
+    if (r < pLeft + pRight + pCenter) return 'center';
     return 'straight';
   }
 
@@ -106,7 +119,7 @@ export class Road {
       if (world < end) {
         if (world < s.startWorld) return s.startX;
         const t = (world - s.startWorld) / s.lengthPx;
-        return s.startX + (s.targetX - s.startX) * smootherstep(t);
+        return s.startX + (s.targetX - s.startX) * easeInOutSharp(t);
       }
     }
     const last = segs[segs.length - 1];
