@@ -2,7 +2,20 @@ import type { ThemeTokens } from '../theme';
 import type { Road } from './road';
 import type { Vehicle } from './vehicle';
 
-const METER_PX = 3.2;
+/** How far ahead of the player the visible road extends, in meters. */
+const VIEW_METERS = 24;
+/** Row samples down the screen so bends render smoothly. */
+const SAMPLES = 64;
+const DASH_METERS = 6;
+const DASH_ON = 3; // meters painted, alternating with 3m gaps
+
+interface Row {
+  cx: number;
+  half: number;
+  y: number;
+  /** World meters of this row above the player. */
+  ahead: number;
+}
 
 /** Strict top-down 2D render: no rotation, no tilt. Road scrolls down the Y axis. */
 export function renderScene(
@@ -16,68 +29,151 @@ export function renderScene(
   ctx.fillStyle = tokens.surfaceBase;
   ctx.fillRect(0, 0, width, height);
 
-  const cx = road.centerX(width);
+  // Sample the road center down the screen so bends render smoothly while
+  // shoulders and lane lines stay exactly parallel to the center.
+  const rows: Row[] = [];
   const half = road.halfWidth(width);
+  for (let i = 0; i <= SAMPLES; i++) {
+    const t = i / SAMPLES;
+    const ahead = (1 - t) * VIEW_METERS;
+    rows.push({ cx: road.centerXAt(road.scroll + ahead, width), half, y: t * height, ahead });
+  }
+
   const shoulder = 14;
 
+  // Shoulder band (drawn first, beneath asphalt)
   ctx.fillStyle = tokens.surfaceBaseGlow;
-  ctx.fillRect(cx - half - shoulder, 0, (half + shoulder) * 2, height);
-  ctx.fillStyle = tokens.surfaceRoad;
-  ctx.fillRect(cx - half, 0, half * 2, height);
+  for (let i = 0; i < SAMPLES; i++) {
+    quad(ctx, rows[i], rows[i + 1], half + shoulder);
+  }
 
-  drawLaneMarkers(ctx, cx, half, road.scroll, height, tokens);
-  drawEdges(ctx, cx, half, shoulder, height, tokens);
+  // Asphalt
+  ctx.fillStyle = tokens.surfaceRoad;
+  for (let i = 0; i < SAMPLES; i++) {
+    quad(ctx, rows[i], rows[i + 1], half);
+  }
+
+  drawLaneMarkers(ctx, rows, road, tokens);
+  drawEdges(ctx, rows, shoulder, tokens);
   drawVehicle(ctx, width, height, road, vehicle, tokens);
+}
+
+function quad(
+  ctx: CanvasRenderingContext2D,
+  a: Row,
+  b: Row,
+  halfExtent: number,
+): void {
+  ctx.beginPath();
+  ctx.moveTo(a.cx - halfExtent, a.y);
+  ctx.lineTo(a.cx + halfExtent, a.y);
+  ctx.lineTo(b.cx + halfExtent, b.y);
+  ctx.lineTo(b.cx - halfExtent, b.y);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function drawLaneMarkers(
   ctx: CanvasRenderingContext2D,
-  cx: number,
-  half: number,
-  scroll: number,
-  height: number,
+  rows: Row[],
+  road: Road,
   tokens: ThemeTokens,
 ): void {
   const lanes = 3;
-  const dashH = 26;
-  const gap = 22;
-  const cycle = dashH + gap;
-  const offset = (scroll * METER_PX) % cycle;
-
+  const cycle = DASH_METERS * 2;
   for (let i = 1; i < lanes; i++) {
-    const x = cx - half + (half * 2 * i) / lanes;
+    const frac = i / lanes;
     const color = i === 1 ? tokens.accentWarning : tokens.surfaceRoadMark;
     ctx.fillStyle = color;
     ctx.globalAlpha = 0.9;
-    for (let y = -cycle + offset; y < height; y += cycle) {
-      ctx.fillRect(x - 2, y, 4, dashH);
+    for (let k = 0; k < rows.length - 1; k++) {
+      const a = rows[k];
+      const b = rows[k + 1];
+      // Dash phase from absolute world position (scroll + ahead) so dashes
+      // are anchored to the road, not the screen.
+      const phaseA = (road.scrollAbs + a.ahead) % cycle;
+      const phaseB = (road.scrollAbs + b.ahead) % cycle;
+      const onA = phaseA < DASH_ON;
+      const onB = phaseB < DASH_ON;
+      if (onA && onB) {
+        stripe(ctx, a, b, frac);
+      } else if (onA !== onB) {
+        // Dash boundary inside this row: paint the on-part proportionally.
+        const f = onA ? (DASH_ON - phaseA) / (phaseB - phaseA) : (cycle - phaseA) / (phaseB - phaseA);
+        const clamped = Math.max(0, Math.min(1, f));
+        const from = onA ? a : b;
+        const to: Row = {
+          cx: a.cx + (b.cx - a.cx) * clamped,
+          half: a.half + (b.half - a.half) * clamped,
+          y: a.y + (b.y - a.y) * clamped,
+          ahead: 0,
+        };
+        stripe(ctx, from, to, frac);
+      }
     }
     ctx.globalAlpha = 1;
   }
 }
 
-function drawEdges(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  half: number,
-  shoulder: number,
-  height: number,
-  tokens: ThemeTokens,
-): void {
+function drawEdges(ctx: CanvasRenderingContext2D, rows: Row[], shoulder: number, tokens: ThemeTokens): void {
+  // Solid edge lines parallel to the center, following the same sampled rows.
   ctx.fillStyle = tokens.surfaceRoadMark;
   ctx.globalAlpha = 0.5;
-  ctx.fillRect(cx - half - 2, 0, 2, height);
-  ctx.fillRect(cx + half, 0, 2, height);
+  for (let k = 0; k < rows.length - 1; k++) {
+    const a = rows[k];
+    const b = rows[k + 1];
+    ctx.beginPath();
+    ctx.moveTo(a.cx - a.half - 2, a.y);
+    ctx.lineTo(a.cx - a.half, a.y);
+    ctx.lineTo(b.cx - b.half, b.y);
+    ctx.lineTo(b.cx - b.half - 2, b.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(a.cx + a.half, a.y);
+    ctx.lineTo(a.cx + a.half + 2, a.y);
+    ctx.lineTo(b.cx + b.half + 2, b.y);
+    ctx.lineTo(b.cx + b.half, b.y);
+    ctx.closePath();
+    ctx.fill();
+  }
   ctx.globalAlpha = 1;
 
+  // Rumble hatching on the shoulders
   ctx.fillStyle = tokens.uiOverlayMuted;
   ctx.globalAlpha = 0.25;
   const hatchW = 8;
-  for (let y = 0; y < height; y += 18) {
-    ctx.fillRect(cx - half - shoulder, y, hatchW, 9);
-    ctx.fillRect(cx + half + shoulder - hatchW, y + 9, hatchW, 9);
+  for (let k = 0; k < rows.length - 1; k += 4) {
+    const a = rows[k];
+    const b = rows[Math.min(k + 4, rows.length - 1)];
+    ctx.beginPath();
+    ctx.moveTo(a.cx - a.half - shoulder, a.y);
+    ctx.lineTo(a.cx - a.half - shoulder + hatchW, a.y);
+    ctx.lineTo(b.cx - b.half - shoulder + hatchW, b.y);
+    ctx.lineTo(b.cx - b.half - shoulder, b.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(a.cx + a.half + shoulder - hatchW, a.y);
+    ctx.lineTo(a.cx + a.half + shoulder, a.y);
+    ctx.lineTo(b.cx + b.half + shoulder, b.y);
+    ctx.lineTo(b.cx + b.half + shoulder - hatchW, b.y);
+    ctx.closePath();
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
+}
+
+function stripe(ctx: CanvasRenderingContext2D, a: Row, b: Row, frac: number): void {
+  const ax = a.cx + (2 * frac - 1) * a.half;
+  const bx = b.cx + (2 * frac - 1) * b.half;
+  ctx.beginPath();
+  ctx.moveTo(ax - 2, a.y);
+  ctx.lineTo(ax + 2, a.y);
+  ctx.lineTo(bx + 2, b.y);
+  ctx.lineTo(bx - 2, b.y);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function drawVehicle(
