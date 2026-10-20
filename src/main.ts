@@ -51,6 +51,11 @@ function resizeCanvas(): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
+let input: InputSource = createKeyboardInput();
+let deckGear = 'LOW' as 'LOW' | 'HIGH';
+
+const engine = new Engine(input);
+
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 
@@ -60,11 +65,6 @@ function syncViewport(): void {
 }
 syncViewport();
 window.addEventListener('resize', syncViewport);
-
-let input: InputSource = createKeyboardInput();
-let deckGear = 'LOW' as 'LOW' | 'HIGH';
-
-const engine = new Engine(input);
 
 function switchInput(next: InputSource): void {
   input.destroy();
