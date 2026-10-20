@@ -24,6 +24,8 @@ const OFFROAD_EXTRA_DRAG = 130;
 /** Shoulder/grass cuts top speed by 50%. */
 const OFFROAD_SPEED_FACTOR = 0.5;
 const PLAYER_WIDTH = 30;
+/** Outward lateral pull applied while on the shoulder/grass. */
+const OFFROAD_LATERAL_DRAG = 40;
 const EDGE_MARGIN = 16;
 
 export class Vehicle {
@@ -58,6 +60,11 @@ export class Vehicle {
     if (this.offRoad && !wasOffRoad) {
       // Instant velocity dampening when hitting the shoulder.
       this.vx *= 0.4;
+    }
+    if (this.offRoad) {
+      // Slight lateral drag toward the outside of the road.
+      const outward = this.x >= centerX ? OFFROAD_LATERAL_DRAG : -OFFROAD_LATERAL_DRAG;
+      this.vx += outward * dt;
     }
     const maxNow = spec.maxSpeed * (this.offRoad ? OFFROAD_SPEED_FACTOR : 1);
 

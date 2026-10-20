@@ -8,11 +8,10 @@ const CAR_H = 52;
 const DASH_LEN = 26;
 const DASH_GAP = 22;
 const DASH_W = 4;
+/** Horizontal scan step for the road surface polygon. */
+const SCAN_STEP = 16;
 
-/**
- * Waypoint-spline renderer. Strict top-down 2D: the road is one continuous
- * path traced along the node edges; no rotation, no tilt.
- */
+/** Scanline-sampled Bézier highway renderer. Strict top-down 2D, no tilt. */
 export function renderScene(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -26,106 +25,111 @@ export function renderScene(
   ctx.fillStyle = tokens.surfaceBase;
   ctx.fillRect(0, 0, width, height);
 
-  const nodes = road.nodes;
-  if (nodes.length < 2) return;
+  if (road.points.length < 4) return;
 
-  // Road surface: one continuous path up the left edges, across the top,
-  // down the right edges, closed.
+  // Road surface: a solid polygon traced at SCAN_STEP resolution.
   ctx.fillStyle = tokens.surfaceRoad;
   ctx.beginPath();
-  ctx.moveTo(nodes[0].centerX - nodes[0].roadWidth / 2, nodes[0].y);
-  for (let i = 1; i < nodes.length; i++) {
-    ctx.lineTo(nodes[i].centerX - nodes[i].roadWidth / 2, nodes[i].y);
+  let first = true;
+  let y = 0;
+  while (y <= height) {
+    const cx = road.centerXAtY(y);
+    const half = road.roadWidth / 2;
+    const left = cx - half;
+    if (first) {
+      ctx.moveTo(left, y);
+      first = false;
+    } else {
+      ctx.lineTo(left, y);
+    }
+    y += SCAN_STEP;
   }
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    ctx.lineTo(nodes[i].centerX + nodes[i].roadWidth / 2, nodes[i].y);
+  y = height;
+  while (y >= 0) {
+    const cx = road.centerXAtY(y);
+    const half = road.roadWidth / 2;
+    ctx.lineTo(cx + half, y);
+    y -= SCAN_STEP;
   }
   ctx.closePath();
   ctx.fill();
 
-  drawShoulders(ctx, nodes, tokens);
-  drawLaneMarkings(ctx, nodes, scrollPx, tokens);
+  drawShoulders(ctx, road, height, tokens);
+  drawLaneMarkings(ctx, road, height, scrollPx, tokens);
   drawVehicle(ctx, height, vehicle, tokens);
 }
 
 function drawShoulders(
   ctx: CanvasRenderingContext2D,
-  nodes: RoadNode[],
+  road: Road,
+  height: number,
   tokens: ThemeTokens,
 ): void {
   ctx.strokeStyle = tokens.accentDanger;
   ctx.lineWidth = SHOULDER_W;
   ctx.lineJoin = 'round';
+
   ctx.beginPath();
-  ctx.moveTo(nodes[0].centerX - nodes[0].roadWidth / 2, nodes[0].y);
-  for (let i = 1; i < nodes.length; i++) {
-    ctx.lineTo(nodes[i].centerX - nodes[i].roadWidth / 2, nodes[i].y);
+  let y = 0;
+  while (y <= height) {
+    const cx = road.centerXAtY(y);
+    const half = road.roadWidth / 2;
+    const left = cx - half;
+    if (y === 0) ctx.moveTo(left, y);
+    else ctx.lineTo(left, y);
+    y += SCAN_STEP;
   }
-  ctx.moveTo(nodes[0].centerX + nodes[0].roadWidth / 2, nodes[0].y);
-  for (let i = 1; i < nodes.length; i++) {
-    ctx.lineTo(nodes[i].centerX + nodes[i].roadWidth / 2, nodes[i].y);
+  ctx.stroke();
+
+  ctx.beginPath();
+  y = 0;
+  while (y <= height) {
+    const cx = road.centerXAtY(y);
+    const half = road.roadWidth / 2;
+    const right = cx + half;
+    if (y === 0) ctx.moveTo(right, y);
+    else ctx.lineTo(right, y);
+    y += SCAN_STEP;
   }
   ctx.stroke();
 }
 
-// Local structural type to avoid a circular import.
-interface RoadNode {
-  y: number;
-  centerX: number;
-  roadWidth: number;
-}
-
 function drawLaneMarkings(
   ctx: CanvasRenderingContext2D,
-  nodes: RoadNode[],
+  road: Road,
+  height: number,
   scrollPx: number,
   tokens: ThemeTokens,
 ): void {
   const cycle = DASH_LEN + DASH_GAP;
   const phase = scrollPx % cycle;
-  const firstDashTop = nodes[0].y + phase - cycle;
 
   ctx.fillStyle = tokens.surfaceRoadMark;
   ctx.globalAlpha = 0.9;
   for (let lane = 1; lane < 3; lane++) {
     const frac = lane / 3;
-    for (let dashTop = firstDashTop; dashTop < nodes[nodes.length - 1].y; dashTop += cycle) {
+    const lateral = (2 * frac - 1) * (road.roadWidth / 2);
+
+    for (let dashTop = phase - cycle; dashTop < height; dashTop += cycle) {
       const dashBottom = dashTop + DASH_LEN;
-      const top = sampleNode(nodes, dashTop);
-      const bottom = sampleNode(nodes, dashBottom);
-      const x0 = top.centerX + (2 * frac - 1) * (top.roadWidth / 2);
-      const x1 = bottom.centerX + (2 * frac - 1) * (bottom.roadWidth / 2);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(Math.min(x0, x1) - DASH_W, dashTop, Math.abs(x1 - x0) + DASH_W * 2, DASH_LEN);
-      ctx.clip();
+      const row = Math.min(height, dashBottom);
+      if (row <= dashTop) continue;
+
+      const cxTop = road.centerXAtY(Math.max(0, dashTop));
+      const cxBot = road.centerXAtY(row);
+      const x0 = cxTop + lateral;
+      const x1 = cxBot + lateral;
+
       ctx.beginPath();
       ctx.moveTo(x0 - DASH_W / 2, dashTop);
       ctx.lineTo(x0 + DASH_W / 2, dashTop);
-      ctx.lineTo(x1 + DASH_W / 2, dashBottom);
-      ctx.lineTo(x1 - DASH_W / 2, dashBottom);
+      ctx.lineTo(x1 + DASH_W / 2, row);
+      ctx.lineTo(x1 - DASH_W / 2, row);
       ctx.closePath();
       ctx.fill();
-      ctx.restore();
     }
   }
   ctx.globalAlpha = 1;
-}
-
-function sampleNode(nodes: RoadNode[], y: number): RoadNode {
-  if (y <= nodes[0].y) return nodes[0];
-  const last = nodes[nodes.length - 1];
-  if (y >= last.y) return last;
-  let i = 1;
-  while (i < nodes.length && nodes[i].y < y) i++;
-  const a = nodes[i - 1];
-  const b = nodes[i];
-  const t = (y - a.y) / (b.y - a.y);
-  return {
-    y,
-    centerX: a.centerX + (b.centerX - a.centerX) * t,
-    roadWidth: a.roadWidth + (b.roadWidth - a.roadWidth) * t,
-  };
 }
 
 function drawVehicle(

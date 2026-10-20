@@ -1,106 +1,154 @@
-export interface RoadNode {
+export type SegKind = 'straight' | 'left' | 'right';
+
+export interface RoadPoint {
   y: number;
-  centerX: number;
-  roadWidth: number;
+  x: number;
 }
 
-const NODE_SPACING = 30;
+const SPACING = 40;
 /** Road edges must stay at least this far inside the canvas boundary. */
 const EDGE_INSET = 20;
-/** Fraction-of-width curve targets: gentle left, center, gentle right. */
-const CURVE_TARGETS = [0.35, 0.5, 0.65];
-/** How strongly each new node eases toward the current curve target. */
-const CURVE_LERP = 0.14;
+const ROAD_WIDTH_FRACTION = 0.65;
+/** Lateral excursion of a bend, as a fraction of canvas width. */
+const BEND_FRACTION = 0.16;
+
+function rand(a: number, b: number): number {
+  return a + Math.random() * (b - a);
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/** Standard Catmull-Rom — a cubic spline passing through all control points with C1 continuity. */
+function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return 0.5 * (
+    2 * p1 +
+    (-p0 + p2) * t +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+  );
+}
 
 /**
- * Waypoint-based spline track. Nodes span from y = -100 to height + 100,
- * spaced 30px apart. Nodes scroll downward with player speed; when one
- * exits the bottom it recycles to the top with its centerX eased toward a
- * curve target that changes every 5-8 seconds.
+ * Pure Bézier-spline highway. The road is a sequence of control points
+ * (spaced 40px) through which a Catmull-Rom spline is drawn, yielding a
+ * continuous curved road with no kinks. Generation is driven by segment
+ * types: 60% straight, 20% sweeping left, 20% sweeping right.
  */
 export class Road {
-  nodes: RoadNode[] = [];
+  points: RoadPoint[] = [];
   width = 0;
   height = 0;
   roadWidth = 0;
 
-  private targetCurveX = 0;
-  private targetTimer = 0;
-  private nextTargetIn = 6;
+  private segLengthPx = 0;
+  private segProgressPx = 0;
+  private segStartX = 0;
+  private segTargetX = 0;
 
   resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
-    this.roadWidth = width * 0.65;
-    const count = Math.ceil((height + 200) / NODE_SPACING) + 1;
-    const mid = this.clampCenter(width / 2);
-    this.nodes = [];
+    this.roadWidth = width * ROAD_WIDTH_FRACTION;
+
+    const startY = -2 * SPACING;
+    const count = Math.ceil((height + 4 * SPACING) / SPACING) + 1;
+    const cx = this.clampCenter(width / 2);
+    this.points = [];
     for (let i = 0; i <= count; i++) {
-      this.nodes.push({ y: -100 + i * NODE_SPACING, centerX: mid, roadWidth: this.roadWidth });
+      this.points.push({ y: startY + i * SPACING, x: cx });
     }
-    this.targetCurveX = mid;
-    this.targetTimer = 0;
+    this.startSegment('straight', cx, width / 2);
   }
 
-  private clampCenter(cx: number): number {
+  private clampCenter(x: number): number {
     const min = this.roadWidth / 2 + EDGE_INSET;
     const max = this.width - this.roadWidth / 2 - EDGE_INSET;
-    return Math.max(min, Math.min(max, cx));
+    return clamp(x, min, max);
+  }
+
+  private startSegment(kind: SegKind, currentX: number, widthCenter: number): void {
+    this.segStartX = currentX;
+    this.segProgressPx = 0;
+    if (kind === 'straight') {
+      this.segLengthPx = rand(800, 1400);
+      this.segTargetX = currentX;
+    } else {
+      this.segLengthPx = rand(600, 1000);
+      const offset = this.width * BEND_FRACTION;
+      this.segTargetX = this.clampCenter(widthCenter + (kind === 'left' ? -offset : offset));
+    }
+  }
+
+  private pickKind(currentX: number): SegKind {
+    const center = this.width / 2;
+    const drift = (currentX - center) / (this.width / 4);
+    let pLeft = 0.2;
+    let pRight = 0.2;
+    if (drift > 0.15) {
+      pLeft = 0.4;
+      pRight = 0.05;
+    } else if (drift < -0.15) {
+      pRight = 0.4;
+      pLeft = 0.05;
+    }
+    const r = Math.random();
+    if (r < pLeft) return 'left';
+    if (r < pLeft + pRight) return 'right';
+    return 'straight';
   }
 
   advance(dt: number, pxSpeed: number): void {
     const dy = pxSpeed * dt;
-    for (const node of this.nodes) node.y += dy;
+    if (dy <= 0) return;
 
-    this.targetTimer += dt;
-    if (this.targetTimer >= this.nextTargetIn) {
-      this.targetTimer = 0;
-      this.nextTargetIn = 5 + Math.random() * 3;
-      this.pickTarget();
-    }
+    for (const p of this.points) p.y += dy;
+    this.segProgressPx += dy;
 
-    while (this.nodes[this.nodes.length - 1].y > this.height + 100) {
-      const recycled = this.nodes.pop()!;
-      recycled.y = this.nodes[0].y - NODE_SPACING;
-      recycled.centerX = this.clampCenter(
-        recycled.centerX + (this.targetCurveX - recycled.centerX) * CURVE_LERP,
+    while (this.points[this.points.length - 1].y > this.height + 2 * SPACING) {
+      const recycled = this.points.pop()!;
+      recycled.y = this.points[0].y - SPACING;
+
+      if (this.segProgressPx >= this.segLengthPx) {
+        const currentX = this.points[0].x;
+        this.startSegment(this.pickKind(currentX), currentX, this.width / 2);
+      }
+      const progress = clamp(this.segProgressPx / this.segLengthPx, 0, 1);
+      const eased = smoothstep(progress);
+      recycled.x = this.clampCenter(
+        this.segStartX + (this.segTargetX - this.segStartX) * eased,
       );
-      recycled.roadWidth = this.roadWidth;
-      this.nodes.unshift(recycled);
+      this.points.unshift(recycled);
     }
-  }
-
-  private pickTarget(): void {
-    const currentFrac = this.targetCurveX / this.width;
-    const options = CURVE_TARGETS.filter((f) => Math.abs(f - currentFrac) > 0.01);
-    const pick = options[Math.floor(Math.random() * options.length)];
-    this.targetCurveX = this.clampCenter(pick * this.width);
   }
 
   /** Interpolated road center X at an arbitrary screen Y. */
   centerXAtY(y: number): number {
-    return this.sample(y).centerX;
-  }
+    const pts = this.points;
+    if (pts.length < 4) return this.width / 2;
+    if (y <= pts[0].y) return pts[0].x;
+    const last = pts[pts.length - 1];
+    if (y >= last.y) return last.x;
 
-  /** Interpolated road width at an arbitrary screen Y. */
-  roadWidthAtY(y: number): number {
-    return this.sample(y).roadWidth;
-  }
-
-  private sample(y: number): RoadNode {
-    const nodes = this.nodes;
-    if (y <= nodes[0].y) return nodes[0];
-    const last = nodes[nodes.length - 1];
-    if (y >= last.y) return last;
     let i = 1;
-    while (i < nodes.length && nodes[i].y < y) i++;
-    const a = nodes[i - 1];
-    const b = nodes[i];
-    const t = (y - a.y) / (b.y - a.y);
-    return {
-      y,
-      centerX: a.centerX + (b.centerX - a.centerX) * t,
-      roadWidth: a.roadWidth + (b.roadWidth - a.roadWidth) * t,
-    };
+    while (i < pts.length - 1 && pts[i].y < y) i++;
+    const p0 = pts[Math.max(0, i - 2)];
+    const p1 = pts[i - 1];
+    const p2 = pts[i];
+    const p3 = pts[Math.min(pts.length - 1, i + 1)];
+    const t = clamp((y - p1.y) / (p2.y - p1.y), 0, 1);
+    return catmullRom(p0.x, p1.x, p2.x, p3.x, t);
+  }
+
+  /** Road width is constant across the track. */
+  roadWidthAtY(_y: number): number {
+    return this.roadWidth;
   }
 }
