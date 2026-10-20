@@ -1,16 +1,20 @@
-export type SegKind = 'straight' | 'left' | 'right';
+type SegKind = 'straight' | 'left' | 'right';
 
-export interface RoadPoint {
-  y: number;
-  x: number;
+interface Segment {
+  startWorld: number;
+  lengthPx: number;
+  startX: number;
+  targetX: number;
+  kind: SegKind;
 }
 
-const SPACING = 40;
-/** Road edges must stay at least this far inside the canvas boundary. */
+/** Road edges stay at least this far inside the canvas boundary. */
 const EDGE_INSET = 20;
 const ROAD_WIDTH_FRACTION = 0.65;
-/** Lateral excursion of a bend, as a fraction of canvas width. */
-const BEND_FRACTION = 0.16;
+/** Lateral excursion of a sweeping bend, as a fraction of canvas width. */
+const BEND_FRACTION = 0.18;
+/** The car sits this far down the screen; used to map screen Y to world distance. */
+const PLAYER_ROW = 0.75;
 
 function rand(a: number, b: number): number {
   return a + Math.random() * (b - a);
@@ -20,71 +24,52 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function smoothstep(t: number): number {
-  return t * t * (3 - 2 * t);
-}
-
-/** Standard Catmull-Rom — a cubic spline passing through all control points with C1 continuity. */
-function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  return 0.5 * (
-    2 * p1 +
-    (-p0 + p2) * t +
-    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
-  );
+/** Smootherstep: zero first and second derivatives at both ends (no sudden slope/kinks). */
+function smootherstep(t: number): number {
+  const x = clamp(t, 0, 1);
+  return x * x * x * (x * (x * 6 - 15) + 10);
 }
 
 /**
- * Pure Bézier-spline highway. The road is a sequence of control points
- * (spaced 40px) through which a Catmull-Rom spline is drawn, yielding a
- * continuous curved road with no kinks. Generation is driven by segment
- * types: 60% straight, 20% sweeping left, 20% sweeping right.
+ * Analytic highway spline. The road center is a single long ease between a
+ * segment's start and target X, evaluated as a smooth curve over the segment's
+ * vertical travel distance. Segments span 1200-2500px, so a 700px viewport
+ * shows at most one broad arc or one steady straightaway at a time.
  */
 export class Road {
-  points: RoadPoint[] = [];
   width = 0;
   height = 0;
   roadWidth = 0;
 
-  private segLengthPx = 0;
-  private segProgressPx = 0;
-  private segStartX = 0;
-  private segTargetX = 0;
+  /** Total vertical travel (px) — world distance at the player's row. */
+  private travel = 0;
+  private segments: Segment[] = [];
+  private plannedUpTo = 0;
 
   resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
     this.roadWidth = width * ROAD_WIDTH_FRACTION;
-
-    const startY = -2 * SPACING;
-    const count = Math.ceil((height + 4 * SPACING) / SPACING) + 1;
-    const cx = this.clampCenter(width / 2);
-    this.points = [];
-    for (let i = 0; i <= count; i++) {
-      this.points.push({ y: startY + i * SPACING, x: cx });
-    }
-    this.startSegment('straight', cx, width / 2);
+    this.travel = 0;
+    this.segments = [];
+    const center = this.clampCenter(width / 2);
+    // Begin one baseline straight covering the negative world behind the car.
+    this.plannedUpTo = -height;
+    this.pushSegment('straight', center);
   }
 
   private clampCenter(x: number): number {
-    const min = this.roadWidth / 2 + EDGE_INSET;
-    const max = this.width - this.roadWidth / 2 - EDGE_INSET;
-    return clamp(x, min, max);
+    const half = this.roadWidth / 2;
+    return clamp(x, half + EDGE_INSET, this.width - half - EDGE_INSET);
   }
 
-  private startSegment(kind: SegKind, currentX: number, widthCenter: number): void {
-    this.segStartX = currentX;
-    this.segProgressPx = 0;
-    if (kind === 'straight') {
-      this.segLengthPx = rand(800, 1400);
-      this.segTargetX = currentX;
-    } else {
-      this.segLengthPx = rand(600, 1000);
-      const offset = this.width * BEND_FRACTION;
-      this.segTargetX = this.clampCenter(widthCenter + (kind === 'left' ? -offset : offset));
-    }
+  private pushSegment(kind: SegKind, startX: number): void {
+    const lengthPx = kind === 'straight' ? rand(1500, 2500) : rand(1200, 1800);
+    let targetX = startX;
+    if (kind === 'left') targetX = this.clampCenter(startX - this.width * BEND_FRACTION);
+    else if (kind === 'right') targetX = this.clampCenter(startX + this.width * BEND_FRACTION);
+    this.segments.push({ startWorld: this.plannedUpTo, lengthPx, startX, targetX, kind });
+    this.plannedUpTo += lengthPx;
   }
 
   private pickKind(currentX: number): SegKind {
@@ -105,46 +90,51 @@ export class Road {
     return 'straight';
   }
 
+  private ensurePlanned(upToWorld: number): void {
+    while (this.plannedUpTo < upToWorld) {
+      const last = this.segments[this.segments.length - 1];
+      this.pushSegment(this.pickKind(last.targetX), last.targetX);
+    }
+  }
+
+  private centerXAtWorld(world: number): number {
+    this.ensurePlanned(world);
+    const segs = this.segments;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const end = s.startWorld + s.lengthPx;
+      if (world < end) {
+        if (world < s.startWorld) return s.startX;
+        const t = (world - s.startWorld) / s.lengthPx;
+        return s.startX + (s.targetX - s.startX) * smootherstep(t);
+      }
+    }
+    const last = segs[segs.length - 1];
+    return last.targetX;
+  }
+
   advance(dt: number, pxSpeed: number): void {
     const dy = pxSpeed * dt;
     if (dy <= 0) return;
+    this.travel += dy;
+    this.ensurePlanned(this.travel + this.height * 2);
 
-    for (const p of this.points) p.y += dy;
-    this.segProgressPx += dy;
-
-    while (this.points[this.points.length - 1].y > this.height + 2 * SPACING) {
-      const recycled = this.points.pop()!;
-      recycled.y = this.points[0].y - SPACING;
-
-      if (this.segProgressPx >= this.segLengthPx) {
-        const currentX = this.points[0].x;
-        this.startSegment(this.pickKind(currentX), currentX, this.width / 2);
-      }
-      const progress = clamp(this.segProgressPx / this.segLengthPx, 0, 1);
-      const eased = smoothstep(progress);
-      recycled.x = this.clampCenter(
-        this.segStartX + (this.segTargetX - this.segStartX) * eased,
-      );
-      this.points.unshift(recycled);
+    // Prune segments fully behind the visible area.
+    const behind = this.travel - this.height;
+    let i = 0;
+    while (
+      i < this.segments.length - 1 &&
+      this.segments[i].startWorld + this.segments[i].lengthPx < behind
+    ) {
+      i++;
     }
+    if (i > 0) this.segments.splice(0, i);
   }
 
   /** Interpolated road center X at an arbitrary screen Y. */
   centerXAtY(y: number): number {
-    const pts = this.points;
-    if (pts.length < 4) return this.width / 2;
-    if (y <= pts[0].y) return pts[0].x;
-    const last = pts[pts.length - 1];
-    if (y >= last.y) return last.x;
-
-    let i = 1;
-    while (i < pts.length - 1 && pts[i].y < y) i++;
-    const p0 = pts[Math.max(0, i - 2)];
-    const p1 = pts[i - 1];
-    const p2 = pts[i];
-    const p3 = pts[Math.min(pts.length - 1, i + 1)];
-    const t = clamp((y - p1.y) / (p2.y - p1.y), 0, 1);
-    return catmullRom(p0.x, p1.x, p2.x, p3.x, t);
+    const world = this.travel + (PLAYER_ROW * this.height - y);
+    return this.centerXAtWorld(world);
   }
 
   /** Road width is constant across the track. */

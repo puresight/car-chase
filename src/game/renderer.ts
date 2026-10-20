@@ -25,7 +25,7 @@ export function renderScene(
   ctx.fillStyle = tokens.surfaceBase;
   ctx.fillRect(0, 0, width, height);
 
-  if (road.points.length < 4) return;
+  if (road.width < 1 || road.height < 1) return;
 
   // Road surface: a solid polygon traced at SCAN_STEP resolution.
   ctx.fillStyle = tokens.surfaceRoad;
