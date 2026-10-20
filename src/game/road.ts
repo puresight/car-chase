@@ -1,16 +1,29 @@
+export const PLAYER_AHEAD_METERS = 6;
+
 interface Segment {
-  /** Meters covered by this segment. */
+  /** Absolute world position where this segment begins (meters). */
+  startWorld: number;
+  /** Segment length in meters. */
   length: number;
-  /** Lateral shift (px at reference width) from segment start to segment end. */
-  shift: number;
-  /** Entry lateral offset, resolved when the segment becomes active. */
-  startOffset: number;
+  /** Curvature target: 0 = straight, otherwise -0.6..+0.6 (left/right sweep). */
+  curvature: number;
+}
+
+const CURVE_GAIN = 0.22;
+const SHOULDER_PX = 14;
+const EDGE_MARGIN = 8;
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 /**
- * Segment-based road model: long straights (75%) interleaved with gentle,
- * pre-planned curves (25%). The center line is a smooth, bounded polyline
- * over world distance — no per-frame oscillation.
+ * Segment-based road engine. The world is a queue of straightaways
+ * (300-600m, curvature 0) and sweeping bends (200-400m, curvature
+ * -0.6..+0.6). The center line at any world distance is the accumulated
+ * displacement of every segment up to that point, eased with smoothstep so
+ * bends enter and exit gently. Displacement is clamped so lanes never clip
+ * off-screen.
  */
 export class Road {
   /** Total world distance scrolled, in meters. */
@@ -20,96 +33,83 @@ export class Road {
 
   private segments: Segment[] = [];
   private plannedUpTo = 0;
+  private baseOffset = 0;
 
   constructor() {
     this.planMore();
   }
 
   private planMore(): void {
-    // Plan until we have 2000m of lookahead beyond current scroll.
     while (this.plannedUpTo < this.scroll + 2000) {
-      const straight = Math.random() > 0.25;
-      const length = straight
-        ? 320 + Math.random() * 480 // 320–800m straight
-        : 220 + Math.random() * 280; // 220–500m curve
-      const shift = straight
-        ? 0
-        : (Math.random() < 0.5 ? -1 : 1) * (60 + Math.random() * 90); // 60–150px drift
-      this.segments.push({ length, shift, startOffset: 0 });
-      this.plannedUpTo += length;
-    }
-  }
-
-  /** Lateral offset (px) of the road center from the canvas center at world distance s. */
-  private offsetAt(s: number): number {
-    this.resolveStartOffsets();
-    this.planMore();
-
-    let remaining = s;
-    let offset = 0;
-    for (const seg of this.segments) {
-      if (remaining <= seg.length) {
-        const t = Math.max(0, remaining / seg.length);
-        // Smoothstep for gentle enter/exit transitions (large effective radius).
-        const eased = t * t * (3 - 2 * t);
-        return offset + seg.shift * eased;
-      }
-      remaining -= seg.length;
-      offset += seg.shift;
-    }
-    return offset;
-  }
-
-  /** Bake absolute start offsets once a segment becomes reachable. */
-  private resolveStartOffsets(): void {
-    let acc = 0;
-    for (const seg of this.segments) {
-      seg.startOffset = acc;
-      acc += seg.shift;
-    }
-  }
-
-  /** Drop fully-consumed segments so the list doesn't grow unbounded. */
-  private prune(): void {
-    let consumed = 0;
-    let i = 0;
-    while (i < this.segments.length) {
-      const seg = this.segments[i];
-      if (this.scroll >= seg.startOffset + seg.length) {
-        consumed += seg.length;
-        i++;
+      const straight = Math.random() < 0.75;
+      let seg: Segment;
+      if (straight) {
+        seg = { startWorld: this.plannedUpTo, length: 300 + Math.random() * 300, curvature: 0 };
       } else {
-        break;
+        const magnitude = 0.25 + Math.random() * 0.35;
+        // Bias bends to counteract accumulated drift so the road stays centered.
+        const drift = this.accumulatedOffset();
+        const sign = Math.abs(drift) > 30 ? -Math.sign(drift) : Math.random() < 0.5 ? -1 : 1;
+        seg = {
+          startWorld: this.plannedUpTo,
+          length: 200 + Math.random() * 200,
+          curvature: sign * magnitude,
+        };
       }
+      this.segments.push(seg);
+      this.plannedUpTo += seg.length;
     }
-    if (consumed > 0) {
-      this.segments.splice(0, i);
-      // Re-anchor remaining segments relative to the new baseline.
-      let acc = 0;
-      for (const seg of this.segments) {
-        seg.startOffset = acc;
-        acc += seg.shift;
+  }
+
+  private segmentShift(seg: Segment): number {
+    return seg.curvature * CURVE_GAIN * seg.length;
+  }
+
+  private accumulatedOffset(): number {
+    let o = this.baseOffset;
+    for (const seg of this.segments) o += this.segmentShift(seg);
+    return o;
+  }
+
+  /** Lateral road-center offset (px from canvas center) at world distance s. */
+  private offsetAt(s: number, width: number): number {
+    this.planMore();
+    const half = this.halfWidth(width);
+    const maxDrift = Math.max(10, width / 2 - half - SHOULDER_PX - EDGE_MARGIN);
+
+    let offset = this.baseOffset;
+    for (const seg of this.segments) {
+      const end = seg.startWorld + seg.length;
+      if (s < end) {
+        const t = clamp((s - seg.startWorld) / seg.length, 0, 1);
+        const eased = t * t * (3 - 2 * t);
+        return clamp(offset + this.segmentShift(seg) * eased, -maxDrift, maxDrift);
       }
+      offset += this.segmentShift(seg);
     }
+    return clamp(offset, -maxDrift, maxDrift);
   }
 
   advance(meters: number): void {
     this.scroll += meters;
-    this.prune();
+    while (
+      this.segments.length > 0 &&
+      this.scroll >= this.segments[0].startWorld + this.segments[0].length
+    ) {
+      const seg = this.segments.shift()!;
+      this.baseOffset += this.segmentShift(seg);
+    }
+    this.planMore();
   }
 
-  centerX(width: number): number {
-    return width / 2 + this.offsetAt(this.scroll);
-  }
-
-  /** Road center X at an arbitrary world distance s (meters scrolled from start). */
+  /** Road center X at an arbitrary world distance s (meters from start). */
   centerXAt(s: number, width: number): number {
-    return width / 2 + this.offsetAt(s);
+    return width / 2 + this.offsetAt(s, width);
   }
 
-  /** Total world distance scrolled, in meters. */
-  get scrollAbs(): number {
-    return this.scroll;
+  /** Road center X under the player's car (at the car's screen row). */
+  centerX(width: number): number {
+    return this.centerXAt(this.scroll + PLAYER_AHEAD_METERS, width);
   }
 
   halfWidth(width: number): number {
@@ -117,6 +117,7 @@ export class Road {
   }
 
   isOffRoad(x: number, width: number): boolean {
-    return Math.abs(x - this.centerX(width)) > this.halfWidth(width) - 14;
+    const center = this.centerXAt(this.scroll + PLAYER_AHEAD_METERS, width);
+    return Math.abs(x - center) > this.halfWidth(width) - 14;
   }
 }
