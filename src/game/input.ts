@@ -52,6 +52,9 @@ export function createTouchInput(root: HTMLElement, gearBtn: HTMLElement): Input
   let pointerId: number | null = null;
   let brake = false;
 
+  const isOnButton = (target: EventTarget | null): boolean =>
+    target instanceof Element && target.closest('.touch-deck__btn') !== null;
+
   const setFromEvent = (e: PointerEvent): void => {
     const rect = root.getBoundingClientRect();
     const rel = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -59,6 +62,7 @@ export function createTouchInput(root: HTMLElement, gearBtn: HTMLElement): Input
   };
 
   const onDown = (e: PointerEvent): void => {
+    if (isOnButton(e.target)) return;
     pointerId = e.pointerId;
     root.setPointerCapture(e.pointerId);
     setFromEvent(e);

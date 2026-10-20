@@ -4,6 +4,7 @@ import type { Vehicle } from './vehicle';
 
 const METER_PX = 3.2;
 
+/** Strict top-down 2D render: no rotation, no tilt. Road scrolls down the Y axis. */
 export function renderScene(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -12,7 +13,6 @@ export function renderScene(
   road: Road,
   vehicle: Vehicle,
 ): void {
-  ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = tokens.surfaceBase;
   ctx.fillRect(0, 0, width, height);
 
@@ -27,7 +27,7 @@ export function renderScene(
 
   drawLaneMarkers(ctx, cx, half, road.scroll, height, tokens);
   drawEdges(ctx, cx, half, shoulder, height, tokens);
-  drawVehicle(ctx, height, vehicle, tokens);
+  drawVehicle(ctx, width, height, road, vehicle, tokens);
 }
 
 function drawLaneMarkers(
@@ -48,19 +48,12 @@ function drawLaneMarkers(
     const x = cx - half + (half * 2 * i) / lanes;
     const color = i === 1 ? tokens.accentWarning : tokens.surfaceRoadMark;
     ctx.fillStyle = color;
-    ctx.globalAlpha = i === 1 ? 0.85 : 0.9;
+    ctx.globalAlpha = 0.9;
     for (let y = -cycle + offset; y < height; y += cycle) {
       ctx.fillRect(x - 2, y, 4, dashH);
     }
     ctx.globalAlpha = 1;
   }
-
-  ctx.fillStyle = tokens.surfaceRoadMark;
-  ctx.globalAlpha = 0.9;
-  for (let y = -cycle + offset; y < height; y += cycle) {
-    ctx.fillRect(cx - 1.5, y, 3, dashH);
-  }
-  ctx.globalAlpha = 1;
 }
 
 function drawEdges(
@@ -89,19 +82,26 @@ function drawEdges(
 
 function drawVehicle(
   ctx: CanvasRenderingContext2D,
+  width: number,
   height: number,
+  road: Road,
   vehicle: Vehicle,
   tokens: ThemeTokens,
 ): void {
   const w = 30;
   const h = 52;
-  const x = vehicle.x - w / 2;
-  const y = height * 0.8 - h / 2;
+  // Rumble shake while off-road — positional jitter only, never rotation.
+  const rumbleX = vehicle.offRoad ? (Math.random() - 0.5) * 4 : 0;
+  const rumbleY = vehicle.offRoad ? (Math.random() - 0.5) * 3 : 0;
+  const cx = road.centerX(width) + vehicle.offset + rumbleX;
+  const cy = height * 0.75 + rumbleY;
+  const x = cx - w / 2;
+  const y = cy - h / 2;
 
   ctx.fillStyle = tokens.accentPrimaryGlow;
   ctx.globalAlpha = 0.18;
   ctx.beginPath();
-  ctx.ellipse(vehicle.x, y + h * 0.9, w * 0.85, h * 0.28, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, y + h * 0.9, w * 0.85, h * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
 
@@ -117,11 +117,6 @@ function drawVehicle(
   ctx.fillStyle = tailGlow;
   ctx.fillRect(x + 3, y + h - 5, 6, 3);
   ctx.fillRect(x + w - 9, y + h - 5, 6, 3);
-
-  const tilt = Math.max(-0.18, Math.min(0.18, vehicle.vx / 900));
-  ctx.translate(vehicle.x, y + h / 2);
-  ctx.rotate(tilt);
-  ctx.translate(-vehicle.x, -(y + h / 2));
 }
 
 function roundRect(

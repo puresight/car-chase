@@ -161,7 +161,7 @@ body {
 }
 
 .touch-deck__steer {
-  pointer-events: auto;
+  pointer-events: none;
   position: relative;
   width: 46%;
   height: 72px;
@@ -174,7 +174,7 @@ body {
   overflow: hidden;
 }
 
-.touch-deck__steer.is-active {
+.stage.is-active .touch-deck__steer {
   border-color: var(--accent-primary);
 }
 
@@ -250,4 +250,86 @@ body {
 
 .touch-deck__btn--brake:active {
   background: rgba(245, 71, 61, 0.2);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 10, 0.72);
+  backdrop-filter: blur(3px);
+  z-index: 30;
+  opacity: 1;
+  transition: opacity 250ms ease;
+}
+
+.overlay[data-state='playing'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 32px 28px;
+  max-width: min(90vw, 420px);
+  text-align: center;
+}
+
+.overlay__title {
+  font-size: clamp(32px, 10vw, 48px);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--accent-primary);
+  text-shadow: 0 0 32px rgba(34, 211, 238, 0.4);
+}
+
+.overlay__legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--ui-overlay-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.overlay__legend kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 6px;
+  border: 1px solid rgba(232, 237, 242, 0.25);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ui-overlay);
+  background: rgba(232, 237, 242, 0.08);
+}
+
+.overlay__start {
+  min-height: 52px;
+  padding: 14px 40px;
+  border: none;
+  border-radius: 14px;
+  background: var(--accent-primary);
+  color: #052027;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  box-shadow: var(--accent-primary-glow);
+  transition: transform 120ms ease, filter 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.overlay__start:active {
+  transform: scale(0.97);
+  filter: brightness(1.1);
 }

@@ -23,14 +23,27 @@ const GEARS: Record<GearTier, GearSpec> = {
 const BRAKE_DECEL = 280;
 const OFFROAD_EXTRA_DRAG = 130;
 const OFFROAD_SPEED_FACTOR = 0.45;
+/** Lateral half-width of drivable area beyond the asphalt edge (shoulder allowance). */
+const SHOULDER_ALLOWANCE = 8;
+/** Offset from road center at which the car counts as off-road (rumble + drag). */
+const OFFROAD_THRESHOLD = 0.86;
 
 export class Vehicle {
-  x = 0;
+  /** Lateral offset in px from the road's center line. 0 = middle lane. */
+  offset = 0;
   vx = 0;
   /** Current speed in km/h. */
   speed = 0;
   gear: GearTier = 'LOW';
   offRoad = false;
+
+  reset(): void {
+    this.offset = 0;
+    this.vx = 0;
+    this.speed = 0;
+    this.gear = 'LOW';
+    this.offRoad = false;
+  }
 
   shiftGear(): void {
     this.gear = this.gear === 'LOW' ? 'HIGH' : 'LOW';
@@ -38,8 +51,14 @@ export class Vehicle {
 
   update(dt: number, input: VehicleInput, road: Road, width: number): void {
     const spec = GEARS[this.gear];
+    const half = road.halfWidth(width);
 
-    this.offRoad = road.isOffRoad(this.x, width);
+    const wasOffRoad = this.offRoad;
+    this.offRoad = Math.abs(this.offset) > half * OFFROAD_THRESHOLD;
+    if (this.offRoad && !wasOffRoad) {
+      // Instant velocity dampening when hitting the shoulder.
+      this.vx *= 0.4;
+    }
     const maxNow = spec.maxSpeed * (this.offRoad ? OFFROAD_SPEED_FACTOR : 1);
 
     if (input.throttle && !input.brake) {
@@ -57,15 +76,15 @@ export class Vehicle {
     const targetVx = input.steer * authority;
     const k = 1 - Math.exp(-spec.grip * dt);
     this.vx += (targetVx - this.vx) * k;
-    this.x += this.vx * dt;
+    this.offset += this.vx * dt;
 
-    const margin = 18;
-    if (this.x < margin) {
-      this.x = margin;
-      this.vx = 0;
-    } else if (this.x > width - margin) {
-      this.x = width - margin;
-      this.vx = 0;
+    const limit = half + SHOULDER_ALLOWANCE;
+    if (this.offset < -limit) {
+      this.offset = -limit;
+      this.vx = Math.min(this.vx, 0);
+    } else if (this.offset > limit) {
+      this.offset = limit;
+      this.vx = Math.max(this.vx, 0);
     }
   }
 }
