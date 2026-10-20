@@ -91,7 +91,7 @@ window.addEventListener('resize', resizeCanvas);
 
 function syncViewport(): void {
   const rect = canvas.parentElement!.getBoundingClientRect();
-  engine.setViewport(rect.width);
+  engine.setViewport(rect.width, rect.height);
 }
 syncViewport();
 window.addEventListener('resize', syncViewport);
@@ -150,7 +150,7 @@ function renderKnob(steer: number): void {
 
 engine.start((state: EngineState) => {
   const rect = canvas.parentElement!.getBoundingClientRect();
-  renderScene(ctx, rect.width, rect.height, tokens, state.road, state.vehicle);
+  renderScene(ctx, rect.width, rect.height, tokens, state.road, state.vehicle, engine.pixelScroll);
   updateHud(hud, {
     speed: state.vehicle.speed,
     gear: state.vehicle.gear,

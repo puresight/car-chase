@@ -12,7 +12,9 @@ export interface EngineState {
   phase: Phase;
 }
 
-const ATTRACT_SCROLL_MPS = 20;
+/** km/h to px/s on screen. */
+const SPEED_TO_PX = 2.6;
+const ATTRACT_SPEED_PXS = 60;
 
 export class Engine {
   readonly road = new Road();
@@ -27,6 +29,8 @@ export class Engine {
   private lastFrame = 0;
   private running = false;
   private viewportWidth = 0;
+  private viewportHeight = 0;
+  private scrollPx = 0;
 
   constructor(input: InputSource) {
     this.input = input;
@@ -36,13 +40,17 @@ export class Engine {
     this.input = next;
   }
 
-  setViewport(width: number): void {
+  setViewport(width: number, height: number): void {
+    const sizeChanged = width !== this.viewportWidth || height !== this.viewportHeight;
     this.viewportWidth = width;
+    this.viewportHeight = height;
+    if (sizeChanged) this.road.resize(width, height);
   }
 
   startMission(): void {
-    this.vehicle.reset();
+    this.vehicle.reset(this.viewportWidth);
     this.distance = 0;
+    this.scrollPx = 0;
     this.phase = 'PLAYING';
   }
 
@@ -51,7 +59,7 @@ export class Engine {
   }
 
   toIdle(): void {
-    this.vehicle.reset();
+    this.vehicle.reset(this.viewportWidth);
     this.phase = 'IDLE';
   }
 
@@ -65,16 +73,22 @@ export class Engine {
 
       if (this.phase === 'PLAYING') {
         const input = this.input.read();
-        this.vehicle.update(dt, input, this.road, this.viewportWidth);
+        this.vehicle.update(
+          dt,
+          input,
+          this.road,
+          this.viewportWidth,
+          this.viewportHeight,
+        );
         const meters = (this.vehicle.speed / 3.6) * dt;
-        this.road.advance(meters);
         this.distance += meters;
+        this.scrollPx += (this.vehicle.speed / 3.6) * SPEED_TO_PX * dt;
+        this.road.advance(dt, (this.vehicle.speed / 3.6) * SPEED_TO_PX);
       } else if (this.phase === 'IDLE') {
         // Attract mode: slow ambient scroll, car parked center.
-        this.road.advance(ATTRACT_SCROLL_MPS * dt);
-        this.vehicle.offset = 0;
-        this.vehicle.vx = 0;
-        this.vehicle.speed = 0;
+        this.road.advance(dt, ATTRACT_SPEED_PXS);
+        this.scrollPx += ATTRACT_SPEED_PXS * dt;
+        this.vehicle.reset(this.viewportWidth);
       }
 
       this.frameTimes.push(now);
@@ -101,5 +115,9 @@ export class Engine {
   stop(): void {
     this.running = false;
     cancelAnimationFrame(this.rafId);
+  }
+
+  get pixelScroll(): number {
+    return this.scrollPx;
   }
 }

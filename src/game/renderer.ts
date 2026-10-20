@@ -2,24 +2,17 @@ import type { ThemeTokens } from '../theme';
 import type { Road } from './road';
 import type { Vehicle } from './vehicle';
 
-/** How far ahead of the player the visible road extends, in meters. */
-const VIEW_METERS = 24;
-/** Vertical slice resolution for the road surface. */
-const SURFACE_STEPS = 32;
-/** Vertical slice resolution for lane stripes. */
-const STRIPE_STEPS = 64;
-const DASH_METERS = 6;
-const DASH_ON = 3;
-const STRIPE_HALF_W = 2;
-const SHOULDER_PX = 14;
+const SHOULDER_W = 4;
+const CAR_W = 30;
+const CAR_H = 52;
+const DASH_LEN = 26;
+const DASH_GAP = 22;
+const DASH_W = 4;
 
-interface Slice {
-  cx: number;
-  half: number;
-  y: number;
-}
-
-/** Strict top-down 2D render: no rotation, no tilt. Road scrolls down the Y axis. */
+/**
+ * Waypoint-spline renderer. Strict top-down 2D: the road is one continuous
+ * path traced along the node edges; no rotation, no tilt.
+ */
 export function renderScene(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -27,166 +20,144 @@ export function renderScene(
   tokens: ThemeTokens,
   road: Road,
   vehicle: Vehicle,
+  scrollPx: number,
 ): void {
+  // Grass/terrain
   ctx.fillStyle = tokens.surfaceBase;
   ctx.fillRect(0, 0, width, height);
 
-  const slices: Slice[] = [];
-  const half = road.halfWidth(width);
-  for (let i = 0; i <= SURFACE_STEPS; i++) {
-    const t = i / SURFACE_STEPS;
-    const ahead = (1 - t) * VIEW_METERS;
-    slices.push({
-      cx: road.centerXAt(road.scroll + ahead, width),
-      half,
-      y: t * height,
-    });
-  }
+  const nodes = road.nodes;
+  if (nodes.length < 2) return;
 
-  // Shoulder band (drawn first, beneath asphalt)
-  ctx.fillStyle = tokens.surfaceBaseGlow;
-  for (let i = 0; i < SURFACE_STEPS; i++) {
-    quad(ctx, slices[i], slices[i + 1], half + SHOULDER_PX);
-  }
-
-  // Asphalt
+  // Road surface: one continuous path up the left edges, across the top,
+  // down the right edges, closed.
   ctx.fillStyle = tokens.surfaceRoad;
-  for (let i = 0; i < SURFACE_STEPS; i++) {
-    quad(ctx, slices[i], slices[i + 1], half);
-  }
-
-  // Solid edge lines riding the asphalt boundary of every slice
-  ctx.fillStyle = tokens.surfaceRoadMark;
-  ctx.globalAlpha = 0.5;
-  for (let i = 0; i < SURFACE_STEPS; i++) {
-    edgeQuad(ctx, slices[i], slices[i + 1], half - STRIPE_HALF_W, half);
-    edgeQuad(ctx, slices[i], slices[i + 1], -half, -half + STRIPE_HALF_W);
-  }
-  ctx.globalAlpha = 1;
-
-  drawLaneDividers(ctx, road, width, height, half, tokens);
-  drawVehicle(ctx, width, height, road, vehicle, tokens);
-}
-
-function quad(
-  ctx: CanvasRenderingContext2D,
-  a: Slice,
-  b: Slice,
-  halfExtent: number,
-): void {
   ctx.beginPath();
-  ctx.moveTo(a.cx - halfExtent, a.y);
-  ctx.lineTo(a.cx + halfExtent, a.y);
-  ctx.lineTo(b.cx + halfExtent, b.y);
-  ctx.lineTo(b.cx - halfExtent, b.y);
+  ctx.moveTo(nodes[0].centerX - nodes[0].roadWidth / 2, nodes[0].y);
+  for (let i = 1; i < nodes.length; i++) {
+    ctx.lineTo(nodes[i].centerX - nodes[i].roadWidth / 2, nodes[i].y);
+  }
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    ctx.lineTo(nodes[i].centerX + nodes[i].roadWidth / 2, nodes[i].y);
+  }
   ctx.closePath();
   ctx.fill();
+
+  drawShoulders(ctx, nodes, tokens);
+  drawLaneMarkings(ctx, nodes, scrollPx, tokens);
+  drawVehicle(ctx, height, vehicle, tokens);
 }
 
-function edgeQuad(
+function drawShoulders(
   ctx: CanvasRenderingContext2D,
-  a: Slice,
-  b: Slice,
-  from: number,
-  to: number,
-): void {
-  ctx.beginPath();
-  ctx.moveTo(a.cx + from, a.y);
-  ctx.lineTo(a.cx + to, a.y);
-  ctx.lineTo(b.cx + to, b.y);
-  ctx.lineTo(b.cx + from, b.y);
-  ctx.closePath();
-  ctx.fill();
-}
-
-/**
- * Dashed lane dividers. The dash pattern is anchored to world distance, and
- * each stripe segment follows the center-line offset of its slices so the
- * striping bends naturally with the road.
- */
-function drawLaneDividers(
-  ctx: CanvasRenderingContext2D,
-  road: Road,
-  width: number,
-  height: number,
-  half: number,
+  nodes: RoadNode[],
   tokens: ThemeTokens,
 ): void {
-  const lanes = 3;
-  const cycle = DASH_METERS * 2;
-  ctx.fillStyle = tokens.surfaceRoadMark;
-
-  for (let lane = 1; lane < lanes; lane++) {
-    const lateral = (2 * (lane / lanes) - 1) * half;
-    ctx.globalAlpha = 0.9;
-
-    for (let k = 0; k < STRIPE_STEPS; k++) {
-      const t0 = k / STRIPE_STEPS;
-      const t1 = (k + 1) / STRIPE_STEPS;
-      const s0 = road.scroll + (1 - t0) * VIEW_METERS;
-      const s1 = road.scroll + (1 - t1) * VIEW_METERS;
-      if (!inDash(s0, s1, cycle)) continue;
-
-      const y0 = t0 * height;
-      const y1 = t1 * height;
-      const x0 = road.centerXAt(s0, width) + lateral;
-      const x1 = road.centerXAt(s1, width) + lateral;
-      ctx.fillRect(
-        Math.min(x0, x1) - STRIPE_HALF_W,
-        y0,
-        Math.abs(x1 - x0) + STRIPE_HALF_W * 2,
-        y1 - y0,
-      );
-    }
-    ctx.globalAlpha = 1;
+  ctx.strokeStyle = tokens.accentDanger;
+  ctx.lineWidth = SHOULDER_W;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(nodes[0].centerX - nodes[0].roadWidth / 2, nodes[0].y);
+  for (let i = 1; i < nodes.length; i++) {
+    ctx.lineTo(nodes[i].centerX - nodes[i].roadWidth / 2, nodes[i].y);
   }
+  ctx.moveTo(nodes[0].centerX + nodes[0].roadWidth / 2, nodes[0].y);
+  for (let i = 1; i < nodes.length; i++) {
+    ctx.lineTo(nodes[i].centerX + nodes[i].roadWidth / 2, nodes[i].y);
+  }
+  ctx.stroke();
 }
 
-function inDash(s0: number, s1: number, cycle: number): boolean {
-  const p0 = s0 % cycle;
-  const p1 = s1 % cycle;
-  if (p1 >= p0) return p0 < DASH_ON;
-  // Wrapped across a cycle boundary: on if either side is in the dash window.
-  return p0 < DASH_ON || p1 < DASH_ON;
+// Local structural type to avoid a circular import.
+interface RoadNode {
+  y: number;
+  centerX: number;
+  roadWidth: number;
+}
+
+function drawLaneMarkings(
+  ctx: CanvasRenderingContext2D,
+  nodes: RoadNode[],
+  scrollPx: number,
+  tokens: ThemeTokens,
+): void {
+  const cycle = DASH_LEN + DASH_GAP;
+  const phase = scrollPx % cycle;
+  const firstDashTop = nodes[0].y + phase - cycle;
+
+  ctx.fillStyle = tokens.surfaceRoadMark;
+  ctx.globalAlpha = 0.9;
+  for (let lane = 1; lane < 3; lane++) {
+    const frac = lane / 3;
+    for (let dashTop = firstDashTop; dashTop < nodes[nodes.length - 1].y; dashTop += cycle) {
+      const dashBottom = dashTop + DASH_LEN;
+      const top = sampleNode(nodes, dashTop);
+      const bottom = sampleNode(nodes, dashBottom);
+      const x0 = top.centerX + (2 * frac - 1) * (top.roadWidth / 2);
+      const x1 = bottom.centerX + (2 * frac - 1) * (bottom.roadWidth / 2);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(Math.min(x0, x1) - DASH_W, dashTop, Math.abs(x1 - x0) + DASH_W * 2, DASH_LEN);
+      ctx.clip();
+      ctx.beginPath();
+      ctx.moveTo(x0 - DASH_W / 2, dashTop);
+      ctx.lineTo(x0 + DASH_W / 2, dashTop);
+      ctx.lineTo(x1 + DASH_W / 2, dashBottom);
+      ctx.lineTo(x1 - DASH_W / 2, dashBottom);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function sampleNode(nodes: RoadNode[], y: number): RoadNode {
+  if (y <= nodes[0].y) return nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (y >= last.y) return last;
+  let i = 1;
+  while (i < nodes.length && nodes[i].y < y) i++;
+  const a = nodes[i - 1];
+  const b = nodes[i];
+  const t = (y - a.y) / (b.y - a.y);
+  return {
+    y,
+    centerX: a.centerX + (b.centerX - a.centerX) * t,
+    roadWidth: a.roadWidth + (b.roadWidth - a.roadWidth) * t,
+  };
 }
 
 function drawVehicle(
   ctx: CanvasRenderingContext2D,
-  width: number,
   height: number,
-  road: Road,
   vehicle: Vehicle,
   tokens: ThemeTokens,
 ): void {
-  const w = 30;
-  const h = 52;
-  // Rumble shake while off-road — positional jitter only, never rotation.
-  const rumbleX = vehicle.offRoad ? (Math.random() - 0.5) * 4 : 0;
-  const rumbleY = vehicle.offRoad ? (Math.random() - 0.5) * 3 : 0;
-  const cx = road.centerX(width) + vehicle.offset + rumbleX;
-  const cy = height * 0.75 + rumbleY;
-  const x = cx - w / 2;
-  const y = cy - h / 2;
+  const cx = vehicle.x;
+  const cy = height * 0.75;
+  const x = cx - CAR_W / 2;
+  const y = cy - CAR_H / 2;
 
   ctx.fillStyle = tokens.accentPrimaryGlow;
   ctx.globalAlpha = 0.18;
   ctx.beginPath();
-  ctx.ellipse(cx, y + h * 0.9, w * 0.85, h * 0.28, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, y + CAR_H * 0.9, CAR_W * 0.85, CAR_H * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
 
   ctx.fillStyle = tokens.accentPrimary;
-  roundRect(ctx, x, y, w, h, 7);
+  roundRect(ctx, x, y, CAR_W, CAR_H, 7);
   ctx.fill();
 
   ctx.fillStyle = tokens.surfaceBase;
-  roundRect(ctx, x + 5, y + 12, w - 10, 16, 3);
+  roundRect(ctx, x + 5, y + 12, CAR_W - 10, 16, 3);
   ctx.fill();
 
   const tailGlow = vehicle.offRoad ? tokens.accentDanger : tokens.accentWarning;
   ctx.fillStyle = tailGlow;
-  ctx.fillRect(x + 3, y + h - 5, 6, 3);
-  ctx.fillRect(x + w - 9, y + h - 5, 6, 3);
+  ctx.fillRect(x + 3, y + CAR_H - 5, 6, 3);
+  ctx.fillRect(x + CAR_W - 9, y + CAR_H - 5, 6, 3);
 }
 
 function roundRect(
